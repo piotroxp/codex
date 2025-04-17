@@ -4,20 +4,17 @@ import type { AppConfig } from "../config.js";
 import type {
   ResponseInputItem,
   ResponseItem,
+  ResponseInputMessageContent,
+  ResponseOutputText,
 } from "openai/resources/responses/responses.mjs";
 
 import { log, isLoggingEnabled } from "./log.js";
-import { parseToolCallArguments } from "../parsers.js";
 import {
-  ORIGIN,
-  CLI_VERSION,
   getSessionId,
   setCurrentModel,
   setSessionId,
 } from "../session.js";
-import { handleExecCommand } from "./handle-exec-command.js";
 import { randomUUID } from "node:crypto";
-import { getModelCompletion } from "../model-utils.ts";
 
 // Define the type for the completion function
 export type CompletionFunction = (prompt: string) => Promise<string>;
@@ -48,16 +45,10 @@ type AgentLoopParams = {
 export class AgentLoop {
   private model: string;
   private instructions?: string;
-  private approvalPolicy: ApprovalPolicy;
-  private config: AppConfig;
   private completionFn: CompletionFunction;
 
   private onItem: (item: ResponseItem) => void;
   private onLoading: (loading: boolean) => void;
-  private getCommandConfirmation: (
-    command: Array<string>,
-    applyPatch: ApplyPatchCommand | undefined,
-  ) => Promise<CommandConfirmation>;
   private onLastResponseId: (lastResponseId: string) => void;
 
   /**
@@ -106,7 +97,6 @@ export class AgentLoop {
   }: AgentLoopParams & { config?: AppConfig }) {
     this.model = model;
     this.instructions = instructions;
-    this.approvalPolicy = approvalPolicy;
     this.completionFn = completionFn;
 
     // If no `config` has been provided we derive a minimal stub so that the
@@ -114,7 +104,7 @@ export class AgentLoop {
     // defined object.  We purposefully copy over the `model` and
     // `instructions` that have already been passed explicitly so that
     // downstream consumers (e.g. telemetry) still observe the correct values.
-    this.config =
+    const effectiveConfig =
       config ??
       ({
         model,
@@ -226,8 +216,9 @@ export class AgentLoop {
         this.onItem(item as ResponseItem);
 
         if (item.type === 'message') {
-          const contentText = item.content
-            .map(c => (c.type === 'input_text' ? c.text : ''))
+          const contentArray = Array.isArray(item.content) ? item.content : [];
+          const contentText = contentArray
+            .map((c: ResponseInputMessageContent) => (c.type === 'input_text' ? c.text : ''))
             .join(' ');
           fullPrompt += `${item.role === 'user' ? 'User' : 'Assistant'}: ${contentText}\n`;
         } else if (item.type === 'function_call_output') {
@@ -242,7 +233,7 @@ export class AgentLoop {
       fullPrompt = `${mergedInstructions}\n\n${fullPrompt}Assistant:`;
 
       if (isLoggingEnabled()) {
-        log(`AgentLoop.run() Generation ${thisGeneration} - Constructed Prompt (first 500 chars): ${fullPrompt.substring(0, 500)}`);
+        log(`AgentLoop.run() Generation ${thisGeneration} - Prompt: ${fullPrompt.substring(0, 500)}`);
       }
 
       this.onLoading(true);
@@ -259,7 +250,7 @@ export class AgentLoop {
         }
 
         if (isLoggingEnabled()) {
-          log(`AgentLoop.run() Generation ${thisGeneration} - Received Completion (first 500 chars): ${completionText.substring(0, 500)}`);
+          log(`AgentLoop.run() Generation ${thisGeneration} - Completion: ${completionText.substring(0, 500)}`);
         }
 
       } catch (error) {
@@ -278,13 +269,20 @@ export class AgentLoop {
         };
         this.onItem(errorItem);
       } else if (completionText && !this.canceled && !this.hardAbort.signal.aborted && thisGeneration === this.generation) {
+        const assistantMessageContent: ResponseOutputText = {
+          type: "output_text",
+          text: completionText,
+          annotations: [],
+        };
         const assistantMessage: ResponseItem = {
           id: `asst-${Date.now()}`,
           type: "message",
           role: "assistant",
-          content: [{ type: "output_text", text: completionText }],
+          content: [assistantMessageContent],
           model: this.model,
           created: Math.floor(Date.now() / 1000),
+          response_format: "text",
+          processing_time_ms: Date.now() - thinkingStart,
         };
         this.onItem(assistantMessage);
       }

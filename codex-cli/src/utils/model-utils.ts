@@ -1,7 +1,8 @@
 import fetch from "node-fetch"; // Need to install node-fetch: npm install node-fetch
 
 // Base URL for the exo server
-const EXO_SERVER_URL = process.env.EXO_SERVER_URL || "http://localhost:8000";
+// Use bracket notation for process.env
+const EXO_SERVER_URL = process.env['EXO_SERVER_URL'] || "http://localhost:8000";
 
 // Keep RECOMMENDED_MODELS if needed for UI/defaults, but it's now just cosmetic
 // as only phi-4 is supported via the exo server currently.
@@ -64,18 +65,34 @@ export async function getModelCompletion(
 
   for (let i = 0; i < maxGeneratedTokens; i++) {
       // 2. Call /infer with current sequence
-      const inferResponse = await callExoApi<{ logits: number[][][] }>("/infer", {
+      const inferResponse = await callExoApi<{ logits?: number[][][] }>("/infer", {
           request_id: `codex-${Date.now()}`, // Simple request ID
           tokens: currentTokens,
       });
 
-      // 3. Process logits (get the last token's logits)
-      // Logits shape: [batch_size, sequence_length, vocab_size]
-      // We assume batch_size=1
-      const lastTokenLogits = inferResponse.logits[0][inferResponse.logits[0].length - 1];
+      // Add null/undefined checks
+      if (!inferResponse?.logits || inferResponse.logits.length === 0 || inferResponse.logits[0].length === 0) {
+          console.error("Invalid logits received from Exo server:", inferResponse);
+          throw new Error("Invalid logits received from Exo server");
+      }
 
-      // 4. Sample the next token (greedy)
-      const nextToken = lastTokenLogits.indexOf(Math.max(...lastTokenLogits));
+      const batchLogits = inferResponse.logits[0];
+      const lastTokenLogits = batchLogits[batchLogits.length - 1];
+
+      if (!lastTokenLogits || lastTokenLogits.length === 0) {
+        console.error("Invalid last token logits received:", lastTokenLogits);
+        throw new Error("Invalid last token logits received");
+      }
+
+      // Find index of max logit (greedy sampling)
+      let maxLogit = -Infinity;
+      let nextToken = -1;
+      for (let j=0; j < lastTokenLogits.length; j++) {
+          if (lastTokenLogits[j] > maxLogit) {
+              maxLogit = lastTokenLogits[j];
+              nextToken = j;
+          }
+      }
 
       // Basic end-of-sequence check (replace with actual EOS token ID if known)
       // This is a placeholder - need the actual EOS token ID from the tokenizer
@@ -84,15 +101,14 @@ export async function getModelCompletion(
       //     break;
       // }
 
+      if (nextToken < 0) {
+        console.warn("No valid next token found, stopping generation.");
+        break;
+      }
+
       // 5. Add to generated tokens and update current sequence
       generatedTokens.push(nextToken);
       currentTokens = [...currentTokens, nextToken];
-
-       // Optional: Early exit on specific token or condition
-       if (nextToken < 0) { // Placeholder for error or invalid token
-           console.warn("Generated invalid token, stopping generation.")
-           break;
-       } 
   }
 
   // 6. Decode the generated tokens

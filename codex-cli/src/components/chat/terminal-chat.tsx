@@ -18,7 +18,6 @@ import { useTerminalSize } from "../../hooks/use-terminal-size.js";
 import { AgentLoop } from "../../utils/agent/agent-loop.js";
 import { log, isLoggingEnabled } from "../../utils/agent/log.js";
 import { createInputItem } from "../../utils/input-utils.js";
-import { getAvailableModels } from "../../utils/model-utils.js";
 import { CLI_VERSION } from "../../utils/session.js";
 import { shortCwd } from "../../utils/short-path.js";
 import { saveRollout } from "../../utils/storage/save-rollout.js";
@@ -53,7 +52,7 @@ export default function TerminalChat({
   fullStdout,
   completionFn,
 }: Props): React.ReactElement {
-  const [model, setModel] = useState<string>(config.model);
+  const [model] = useState<string>(config.model);
   const [lastResponseId, setLastResponseId] = useState<string | null>(null);
   const [items, setItems] = useState<Array<ResponseItem>>([]);
   const [loading, setLoading] = useState<boolean>(false);
@@ -293,7 +292,7 @@ export default function TerminalChat({
           <ModelOverlay
             currentModel={model}
             hasLastResponse={false}
-            onSelect={(newModel) => {
+            onSelect={(/* newModel */) => {
               console.warn("Model switching via overlay is currently disabled.");
               setOverlayMode("none");
             }}

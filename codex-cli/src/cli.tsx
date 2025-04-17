@@ -27,7 +27,7 @@ import {
   // isModelSupportedForResponses, // Removed: No longer checking OpenAI models
   preloadModels, // Keep if needed for other reasons, or remove if truly unused
   getModelCompletion, // Import our new function (ensure model-utils.ts is used, not .js)
-} from "./utils/model-utils.ts"; // Ensure .ts is specified if needed
+} from "./utils/model-utils"; // Removed .ts extension
 import { parseToolCall } from "./utils/parsers";
 import { onExit, setInkRenderer } from "./utils/terminal";
 import chalk from "chalk";
@@ -257,7 +257,7 @@ if (!(await isModelSupportedForResponses(config.model))) {
 
 // Check if exo server is reachable (optional but recommended)
 async function checkExoServer() {
-  const exoUrl = process.env.EXO_SERVER_URL || "http://localhost:8000";
+  const exoUrl = process.env['EXO_SERVER_URL'] || "http://localhost:8000";
   try {
     // Add a simple health check endpoint to exo/server.py if desired
     // For now, just try reaching the base URL
@@ -268,7 +268,7 @@ async function checkExoServer() {
     console.log(`Exo server appears reachable at ${exoUrl}`);
   } catch (error) {
     console.error(
-      `\n${chalk.red("Error connecting to Exo server at ${exoUrl}.")}\n` +
+      `\n${chalk.red(`Error connecting to Exo server at ${exoUrl}.`)}\n` +
       `Please ensure the Exo server is running and accessible.\n` +
       `Error details: ${error}\n`,
     );
@@ -364,6 +364,7 @@ const instance = render(
     imagePaths={imagePaths}
     approvalPolicy={approvalPolicy}
     fullStdout={fullStdout}
+    completionFn={getModelCompletion}
   />,
   {
     patchConsole: process.env["DEBUG"] ? false : true,
@@ -431,21 +432,13 @@ async function runQuietMode({
   approvalPolicy: ApprovalPolicy;
   config: AppConfig;
 }): Promise<void> {
-  // !!! CRITICAL: Update AgentLoop initialization !!!
-  // We need to inject our getModelCompletion function here, replacing
-  // the OpenAI client or previous method.
-  // This requires finding how AgentLoop gets its completion function.
-  // Assuming AgentLoop constructor or a method takes a completion function:
-  // const agent = new AgentLoop({ completionFn: getModelCompletion, ... });
-
-  // Placeholder: Logging where the change is needed.
-  console.warn("TODO: Update AgentLoop in runQuietMode to use getModelCompletion");
-
+  // Pass getModelCompletion to AgentLoop
   const agent = new AgentLoop({
-    model: config.model, // This might be redundant if completionFn handles it
+    model: config.model,
     config: config,
     instructions: config.instructions,
     approvalPolicy,
+    completionFn: getModelCompletion,
     onItem: (item: ResponseItem) => {
       // eslint-disable-next-line no-console
       console.log(formatResponseItemForQuietMode(item));
