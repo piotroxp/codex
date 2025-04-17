@@ -1,5 +1,5 @@
 import type { ApplyPatchCommand, ApprovalPolicy } from "../../approvals.js";
-import type { CommandConfirmation } from "../../utils/agent/agent-loop.js";
+import type { CommandConfirmation, CompletionFunction } from "../../utils/agent/agent-loop.js";
 import type { AppConfig } from "../../utils/config.js";
 import type { ColorName } from "chalk";
 import type { ResponseItem } from "openai/resources/responses/responses.mjs";
@@ -36,6 +36,7 @@ type Props = {
   imagePaths?: Array<string>;
   approvalPolicy: ApprovalPolicy;
   fullStdout: boolean;
+  completionFn: CompletionFunction;
 };
 
 const colorsByPolicy: Record<ApprovalPolicy, ColorName | undefined> = {
@@ -50,12 +51,12 @@ export default function TerminalChat({
   imagePaths: _initialImagePaths,
   approvalPolicy: initialApprovalPolicy,
   fullStdout,
+  completionFn,
 }: Props): React.ReactElement {
   const [model, setModel] = useState<string>(config.model);
   const [lastResponseId, setLastResponseId] = useState<string | null>(null);
   const [items, setItems] = useState<Array<ResponseItem>>([]);
   const [loading, setLoading] = useState<boolean>(false);
-  // Allow switching approval modes at runtime via an overlay.
   const [approvalPolicy, setApprovalPolicy] = useState<ApprovalPolicy>(
     initialApprovalPolicy,
   );
@@ -72,14 +73,9 @@ export default function TerminalChat({
 
   const PWD = React.useMemo(() => shortCwd(), []);
 
-  // Keep a single AgentLoop instance alive across renders;
-  // recreate only when model/instructions/approvalPolicy change.
   const agentRef = React.useRef<AgentLoop>();
-  const [, forceUpdate] = React.useReducer((c) => c + 1, 0); // trigger re‑render
+  const [, forceUpdate] = React.useReducer((c) => c + 1, 0);
 
-  // ────────────────────────────────────────────────────────────────
-  // DEBUG: log every render w/ key bits of state
-  // ────────────────────────────────────────────────────────────────
   if (isLoggingEnabled()) {
     log(
       `render – agent? ${Boolean(agentRef.current)} loading=${loading} items=${
@@ -98,7 +94,6 @@ export default function TerminalChat({
       );
     }
 
-    // Tear down any existing loop before creating a new one
     agentRef.current?.terminate();
 
     agentRef.current = new AgentLoop({
@@ -106,6 +101,7 @@ export default function TerminalChat({
       config,
       instructions: config.instructions,
       approvalPolicy,
+      completionFn: completionFn,
       onLastResponseId: setLastResponseId,
       onItem: (item) => {
         log(`onItem: ${JSON.stringify(item)}`);
@@ -132,7 +128,6 @@ export default function TerminalChat({
       },
     });
 
-    // force a render so JSX below can "see" the freshly created agent
     forceUpdate();
 
     if (isLoggingEnabled()) {
@@ -145,17 +140,12 @@ export default function TerminalChat({
       }
       agentRef.current?.terminate();
       agentRef.current = undefined;
-      forceUpdate(); // re‑render after teardown too
+      forceUpdate();
     };
-  }, [model, config, approvalPolicy, requestConfirmation]);
+  }, [model, config, approvalPolicy, requestConfirmation, completionFn]);
 
-  // whenever loading starts/stops, reset or start a timer — but pause the
-  // timer while a confirmation overlay is displayed so we don't trigger a
-  // re‑render every second during apply_patch reviews.
   useEffect(() => {
     let handle: ReturnType<typeof setInterval> | null = null;
-    // Only tick the "thinking…" timer when the agent is actually processing
-    // a request *and* the user is not being asked to review a command.
     if (loading && confirmationPrompt == null) {
       setThinkingSeconds(0);
       handle = setInterval(() => {
@@ -174,17 +164,12 @@ export default function TerminalChat({
     };
   }, [loading, confirmationPrompt]);
 
-  // Let's also track whenever the ref becomes available
   const agent = agentRef.current;
   useEffect(() => {
     if (isLoggingEnabled()) {
       log(`agentRef.current is now ${Boolean(agent)}`);
     }
   }, [agent]);
-
-  // ---------------------------------------------------------------------
-  // Dynamic layout constraints – keep total rendered rows <= terminal rows
-  // ---------------------------------------------------------------------
 
   const { rows: terminalRows } = useTerminalSize();
 
@@ -199,7 +184,6 @@ export default function TerminalChat({
       const inputItems = [
         await createInputItem(initialPrompt || "", initialImagePaths || []),
       ];
-      // Clear them to prevent subsequent runs
       setInitialPrompt("");
       setInitialImagePaths([]);
       agent?.run(inputItems);
@@ -207,34 +191,6 @@ export default function TerminalChat({
     processInitialInputItems();
   }, [agent, initialPrompt, initialImagePaths]);
 
-  // ────────────────────────────────────────────────────────────────
-  // In-app warning if CLI --model isn't in fetched list
-  // ────────────────────────────────────────────────────────────────
-  useEffect(() => {
-    (async () => {
-      const available = await getAvailableModels();
-      if (model && available.length > 0 && !available.includes(model)) {
-        setItems((prev) => [
-          ...prev,
-          {
-            id: `unknown-model-${Date.now()}`,
-            type: "message",
-            role: "system",
-            content: [
-              {
-                type: "input_text",
-                text: `Warning: model "${model}" is not in the list of available models returned by OpenAI.`,
-              },
-            ],
-          },
-        ]);
-      }
-    })();
-    // run once on mount
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Just render every item in order, no grouping/collapse
   const lastMessageBatch = items.map((item) => ({ item }));
   const groupCounts: Record<string, number> = {};
   const userMsgCount = items.filter(
@@ -309,7 +265,6 @@ export default function TerminalChat({
               agent.cancel();
               setLoading(false);
 
-              // Add a system message to indicate the interruption
               setItems((prev) => [
                 ...prev,
                 {
@@ -326,7 +281,7 @@ export default function TerminalChat({
               ]);
             }}
             submitInput={(inputs) => {
-              agent.run(inputs, lastResponseId || "");
+              agent.run(inputs);
               return {};
             }}
           />
@@ -337,39 +292,9 @@ export default function TerminalChat({
         {overlayMode === "model" && (
           <ModelOverlay
             currentModel={model}
-            hasLastResponse={Boolean(lastResponseId)}
+            hasLastResponse={false}
             onSelect={(newModel) => {
-              if (isLoggingEnabled()) {
-                log(
-                  "TerminalChat: interruptAgent invoked – calling agent.cancel()",
-                );
-                if (!agent) {
-                  log("TerminalChat: agent is not ready yet");
-                }
-              }
-              agent?.cancel();
-              setLoading(false);
-
-              setModel(newModel);
-              setLastResponseId((prev) =>
-                prev && newModel !== model ? null : prev,
-              );
-
-              setItems((prev) => [
-                ...prev,
-                {
-                  id: `switch-model-${Date.now()}`,
-                  type: "message",
-                  role: "system",
-                  content: [
-                    {
-                      type: "input_text",
-                      text: `Switched model to ${newModel}`,
-                    },
-                  ],
-                },
-              ]);
-
+              console.warn("Model switching via overlay is currently disabled.");
               setOverlayMode("none");
             }}
             onExit={() => setOverlayMode("none")}

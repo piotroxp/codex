@@ -1,6 +1,7 @@
 import type { ApprovalPolicy } from "./approvals";
 import type { AppConfig } from "./utils/config";
 import type { ResponseItem } from "openai/resources/responses/responses";
+import type { CompletionFunction } from "./utils/agent/agent-loop";
 
 import TerminalChat from "./components/chat/terminal-chat";
 import TerminalChatPastRollout from "./components/chat/terminal-chat-past-rollout";
@@ -23,6 +24,7 @@ type Props = {
   rollout?: AppRollout;
   approvalPolicy: ApprovalPolicy;
   fullStdout: boolean;
+  completionFn: CompletionFunction;
 };
 
 export default function App({
@@ -32,6 +34,7 @@ export default function App({
   imagePaths,
   approvalPolicy,
   fullStdout,
+  completionFn,
 }: Props): JSX.Element {
   const app = useApp();
   const [accepted, setAccepted] = useState(() => false);
@@ -98,6 +101,7 @@ export default function App({
       imagePaths={imagePaths}
       approvalPolicy={approvalPolicy}
       fullStdout={fullStdout}
+      completionFn={completionFn}
     />
   );
 }

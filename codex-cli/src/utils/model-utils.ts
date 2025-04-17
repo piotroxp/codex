@@ -1,16 +1,114 @@
+import fetch from "node-fetch"; // Need to install node-fetch: npm install node-fetch
+
+// Base URL for the exo server
+const EXO_SERVER_URL = process.env.EXO_SERVER_URL || "http://localhost:8000";
+
+// Keep RECOMMENDED_MODELS if needed for UI/defaults, but it's now just cosmetic
+// as only phi-4 is supported via the exo server currently.
+export const RECOMMENDED_MODELS: Array<string> = ["phi-4"]; // Update to reflect current reality
+
+// --- New functions to interact with Exo server --- //
+
+async function callExoApi<T>(endpoint: string, body: unknown): Promise<T> {
+  try {
+    const response = await fetch(`${EXO_SERVER_URL}${endpoint}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      const errorBody = await response.text();
+      console.error(`Exo API Error (${response.status}): ${errorBody}`);
+      throw new Error(`Exo API request failed to ${endpoint} with status ${response.status}`);
+    }
+    return (await response.json()) as T;
+  } catch (error) {
+    console.error(`Error calling Exo API endpoint ${endpoint}:`, error);
+    // Consider more specific error handling or re-throwing
+    throw error;
+  }
+}
+
+export async function encodeText(text: string): Promise<number[]> {
+  const response = await callExoApi<{ tokens: number[] }>("/encode", { text });
+  return response.tokens;
+}
+
+export async function decodeTokens(tokens: number[]): Promise<string> {
+  const response = await callExoApi<{ text: string }>("/decode", { tokens });
+  return response.text;
+}
+
+// Placeholder for the actual inference logic that uses the /infer endpoint
+// This will replace the OpenAI completion calls.
+// It needs to handle tokenization, calling /infer, and sampling the logits.
+export async function getModelCompletion(
+  prompt: string,
+  // Add other parameters like max_tokens, temperature, etc. as needed
+): Promise<string> {
+  console.log(`Getting completion for prompt: ${prompt.substring(0, 100)}...`);
+
+  // 1. Encode the prompt
+  const promptTokens = await encodeText(prompt);
+
+  // --- Simple greedy decoding example --- 
+  // TODO: Implement more sophisticated sampling (temperature, top-p)
+  // TODO: Handle max_tokens limit
+  // TODO: Implement streaming if needed
+  let generatedTokens: number[] = [];
+  const maxGeneratedTokens = 100; // Example limit
+  let currentTokens = promptTokens;
+
+  for (let i = 0; i < maxGeneratedTokens; i++) {
+      // 2. Call /infer with current sequence
+      const inferResponse = await callExoApi<{ logits: number[][][] }>("/infer", {
+          request_id: `codex-${Date.now()}`, // Simple request ID
+          tokens: currentTokens,
+      });
+
+      // 3. Process logits (get the last token's logits)
+      // Logits shape: [batch_size, sequence_length, vocab_size]
+      // We assume batch_size=1
+      const lastTokenLogits = inferResponse.logits[0][inferResponse.logits[0].length - 1];
+
+      // 4. Sample the next token (greedy)
+      const nextToken = lastTokenLogits.indexOf(Math.max(...lastTokenLogits));
+
+      // Basic end-of-sequence check (replace with actual EOS token ID if known)
+      // This is a placeholder - need the actual EOS token ID from the tokenizer
+      // const EOS_TOKEN_ID = 2; // Example for some models
+      // if (nextToken === EOS_TOKEN_ID) { 
+      //     break;
+      // }
+
+      // 5. Add to generated tokens and update current sequence
+      generatedTokens.push(nextToken);
+      currentTokens = [...currentTokens, nextToken];
+
+       // Optional: Early exit on specific token or condition
+       if (nextToken < 0) { // Placeholder for error or invalid token
+           console.warn("Generated invalid token, stopping generation.")
+           break;
+       } 
+  }
+
+  // 6. Decode the generated tokens
+  const completionText = await decodeTokens(generatedTokens);
+  console.log(`Generated completion: ${completionText.substring(0, 100)}...`);
+
+  return completionText;
+}
+
+// --- Remove or comment out old OpenAI functions --- //
+
+/*
 import { OPENAI_API_KEY } from "./config";
 import OpenAI from "openai";
 
 const MODEL_LIST_TIMEOUT_MS = 2_000; // 2 seconds
-export const RECOMMENDED_MODELS: Array<string> = ["o4-mini", "o3"];
-
-/**
- * Background model loader / cache.
- *
- * We start fetching the list of available models from OpenAI once the CLI
- * enters interactive mode.  The request is made exactly once during the
- * lifetime of the process and the results are cached for subsequent calls.
- */
 
 let modelsPromise: Promise<Array<string>> | null = null;
 
@@ -38,53 +136,56 @@ async function fetchModels(): Promise<Array<string>> {
 }
 
 export function preloadModels(): void {
-  if (!modelsPromise) {
-    // Fire‑and‑forget – callers that truly need the list should `await`
-    // `getAvailableModels()` instead.
-    void getAvailableModels();
-  }
+  // This might not be necessary anymore unless we pre-check exo server status
+  console.log("PreloadModels (OpenAI) skipped.")
+  // if (!modelsPromise) {
+  //   // Fire‑and‑forget – callers that truly need the list should `await`
+  //   // `getAvailableModels()` instead.
+  //   void getAvailableModels();
+  // }
 }
 
 export async function getAvailableModels(): Promise<Array<string>> {
-  if (!modelsPromise) {
-    modelsPromise = fetchModels();
-  }
-  return modelsPromise;
+  // Return the hardcoded list as we only support phi-4 via exo for now
+  console.log("getAvailableModels returning hardcoded list:", RECOMMENDED_MODELS)
+  return Promise.resolve(RECOMMENDED_MODELS);
+  // if (!modelsPromise) {
+  //   modelsPromise = fetchModels();
+  // }
+  // return modelsPromise;
 }
 
-/**
- * Verify that the provided model identifier is present in the set returned by
- * {@link getAvailableModels}. The list of models is fetched from the OpenAI
- * `/models` endpoint the first time it is required and then cached in‑process.
- */
 export async function isModelSupportedForResponses(
   model: string | undefined | null,
 ): Promise<boolean> {
-  if (
-    typeof model !== "string" ||
-    model.trim() === "" ||
-    RECOMMENDED_MODELS.includes(model)
-  ) {
-    return true;
-  }
+  // Assume phi-4 is always supported if the server is running
+  // Could add a health check endpoint to the exo server later
+  console.log(`isModelSupportedForResponses checking: ${model}`);
+  return model === "phi-4";
+  // ... (rest of the old OpenAI logic removed) ...
+}
+*/
 
-  try {
-    const models = await Promise.race<Array<string>>([
-      getAvailableModels(),
-      new Promise<Array<string>>((resolve) =>
-        setTimeout(() => resolve([]), MODEL_LIST_TIMEOUT_MS),
-      ),
-    ]);
+// Add dummy versions of removed functions if they are still called elsewhere
+// to avoid breaking changes immediately. Mark them as deprecated.
 
-    // If the timeout fired we get an empty list → treat as supported to avoid
-    // false negatives.
-    if (models.length === 0) {
-      return true;
-    }
+/** @deprecated Replaced by Exo server check or removed. */
+export function preloadModels(): void {
+  console.log("preloadModels called (now a no-op).");
+  // Optionally ping the exo server health endpoint here if one exists
+}
 
-    return models.includes(model.trim());
-  } catch {
-    // Network or library failure → don't block start‑up.
-    return true;
-  }
+/** @deprecated Replaced by Exo server check or removed. */
+export async function getAvailableModels(): Promise<Array<string>> {
+  console.log("getAvailableModels called (returns hardcoded ['phi-4']).");
+  return Promise.resolve(["phi-4"]);
+}
+
+/** @deprecated Replaced by Exo server check or removed. */
+export async function isModelSupportedForResponses(
+  model: string | undefined | null,
+): Promise<boolean> {
+  console.log(`isModelSupportedForResponses called for ${model} (returns true if 'phi-4').`);
+  // For now, only allow phi-4
+  return model === "phi-4";
 }

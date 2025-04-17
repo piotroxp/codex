@@ -24,9 +24,10 @@ import {
 } from "./utils/config";
 import { createInputItem } from "./utils/input-utils";
 import {
-  isModelSupportedForResponses,
-  preloadModels,
-} from "./utils/model-utils.js";
+  // isModelSupportedForResponses, // Removed: No longer checking OpenAI models
+  preloadModels, // Keep if needed for other reasons, or remove if truly unused
+  getModelCompletion, // Import our new function (ensure model-utils.ts is used, not .js)
+} from "./utils/model-utils.ts"; // Ensure .ts is specified if needed
 import { parseToolCall } from "./utils/parsers";
 import { onExit, setInkRenderer } from "./utils/terminal";
 import chalk from "chalk";
@@ -54,7 +55,7 @@ const cli = meow(
 
   Options
     -h, --help                 Show usage and exit
-    -m, --model <model>        Model to use for completions (default: o4-mini)
+    // -m, --model <model>        Model to use for completions (default: phi-4 via exo)
     -i, --image <path>         Path(s) to image files to include as input
     -v, --view <rollout>       Inspect a previously saved rollout instead of starting a session
     -q, --quiet                Non-interactive mode that only prints the assistant's final output
@@ -90,7 +91,7 @@ const cli = meow(
       // misc
       help: { type: "boolean", aliases: ["h"] },
       view: { type: "string" },
-      model: { type: "string", aliases: ["m"] },
+      // model: { type: "string", aliases: ["m"] }, // Commented out: Using phi-4 via exo
       image: { type: "string", isMultiple: true, aliases: ["i"] },
       quiet: {
         type: "boolean",
@@ -201,9 +202,10 @@ if (cli.flags.config) {
 }
 
 // ---------------------------------------------------------------------------
-// API key handling
+// API key handling - REMOVED
 // ---------------------------------------------------------------------------
 
+/*
 const apiKey = process.env["OPENAI_API_KEY"];
 
 if (!apiKey) {
@@ -218,6 +220,7 @@ if (!apiKey) {
   );
   process.exit(1);
 }
+*/
 
 const fullContextMode = Boolean(cli.flags.fullContext);
 let config = loadConfig(undefined, undefined, {
@@ -228,15 +231,18 @@ let config = loadConfig(undefined, undefined, {
 });
 
 const prompt = cli.input[0];
-const model = cli.flags.model;
+// const model = cli.flags.model; // Removed: Using hardcoded phi-4 via exo
 const imagePaths = cli.flags.image as Array<string> | undefined;
 
 config = {
-  apiKey,
+  // apiKey, // Removed
   ...config,
-  model: model ?? config.model,
+  // model: model ?? config.model, // Removed: Model selection logic needs rework if multiple exo models are supported
+  model: "phi-4", // Hardcode to phi-4 for now
 };
 
+// Removed model check against OpenAI API
+/*
 if (!(await isModelSupportedForResponses(config.model))) {
   // eslint-disable-next-line no-console
   console.error(
@@ -247,6 +253,31 @@ if (!(await isModelSupportedForResponses(config.model))) {
   );
   process.exit(1);
 }
+*/
+
+// Check if exo server is reachable (optional but recommended)
+async function checkExoServer() {
+  const exoUrl = process.env.EXO_SERVER_URL || "http://localhost:8000";
+  try {
+    // Add a simple health check endpoint to exo/server.py if desired
+    // For now, just try reaching the base URL
+    const response = await fetch(exoUrl);
+    if (!response.ok && response.status !== 404) { // Allow 404 on base path
+      throw new Error(`Server status: ${response.status}`);
+    }
+    console.log(`Exo server appears reachable at ${exoUrl}`);
+  } catch (error) {
+    console.error(
+      `\n${chalk.red("Error connecting to Exo server at ${exoUrl}.")}\n` +
+      `Please ensure the Exo server is running and accessible.\n` +
+      `Error details: ${error}\n`,
+    );
+    process.exit(1);
+  }
+}
+
+// Run check before proceeding
+await checkExoServer();
 
 let rollout: AppRollout | undefined;
 
@@ -323,7 +354,7 @@ const approvalPolicy: ApprovalPolicy =
     ? AutoApprovalMode.AUTO_EDIT
     : AutoApprovalMode.SUGGEST;
 
-preloadModels();
+// preloadModels(); // This is likely a no-op now, keep or remove.
 
 const instance = render(
   <App
@@ -400,8 +431,18 @@ async function runQuietMode({
   approvalPolicy: ApprovalPolicy;
   config: AppConfig;
 }): Promise<void> {
+  // !!! CRITICAL: Update AgentLoop initialization !!!
+  // We need to inject our getModelCompletion function here, replacing
+  // the OpenAI client or previous method.
+  // This requires finding how AgentLoop gets its completion function.
+  // Assuming AgentLoop constructor or a method takes a completion function:
+  // const agent = new AgentLoop({ completionFn: getModelCompletion, ... });
+
+  // Placeholder: Logging where the change is needed.
+  console.warn("TODO: Update AgentLoop in runQuietMode to use getModelCompletion");
+
   const agent = new AgentLoop({
-    model: config.model,
+    model: config.model, // This might be redundant if completionFn handles it
     config: config,
     instructions: config.instructions,
     approvalPolicy,
