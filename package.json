@@ -2,6 +2,7 @@
   "description": "Tools for repo-wide maintenance.",
   "scripts": {
     "release": "cd codex-cli && npm run release",
+    "dev":"cd codex-cli && npm run dev",
     "format": "prettier --check *.json *.md .github/workflows/*.yml",
     "format:fix": "prettier --write *.json *.md .github/workflows/*.yml"
   },
